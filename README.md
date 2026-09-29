@@ -1,256 +1,472 @@
 # ⚡ SettleIQ — AI Finance Controller
 
-> **Razorpay AI Buildathon 2026 — Track 04: AI Finance Controller**
-> **Live Demo:** https://settleiq.streamlit.app
-> **Track Bar:** Throughput + measured accuracy + honest exception list ✅
+> **AI-powered reconciliation and exception management for Indian SMB finance teams**
+
+**Live Demo:** https://settleiq.streamlit.app
+
+SettleIQ is an AI-assisted finance controller that automates reconciliation between **Razorpay settlements, bank statements, and GST invoice data**. It combines deterministic matching, fuzzy matching, AI-assisted exception classification, audit trails, and conversational Q&A into a single workflow.
 
 ---
 
-## Results At A Glance
+## 🚀 Results at a Glance
 
+| Metric                 |              Result |
+| ---------------------- | ------------------: |
+| Records processed      |             **500** |
+| Processing time        |     **< 5 seconds** |
+| Tier 1 exact matches   |             **405** |
+| Tier 2 fuzzy matches   |              **56** |
+| Exceptions             |              **89** |
+| Auto-match rate        | **92.2% (461/500)** |
+| Confirmed bank credits |     **₹1.04 crore** |
+| Amount at risk         |     **₹21.5 lakhs** |
+| Unit tests             |     **6/6 passing** |
+
+All metrics above are calculated from the 500-record dataset included in the repository and can be reproduced locally.
+
+---
+
+# 🎯 Problem
+
+Finance teams often reconcile payment settlements manually using spreadsheets. At higher transaction volumes, this creates several problems:
+
+* Settlement dates may differ from bank credit dates.
+* MDR deductions create small amount differences.
+* Duplicate UTRs can create duplicate-credit anomalies.
+* Missing Razorpay or bank entries require manual investigation.
+* GST-related settlement differences need additional reconciliation.
+* Spreadsheet-based matching becomes difficult to audit and scale.
+
+SettleIQ turns this process into an automated, explainable workflow.
+
+---
+
+# 💡 What SettleIQ Does
+
+SettleIQ processes three sources:
+
+```text
+Razorpay Settlement Data
+          │
+          ├──────────────┐
+          │              │
+Bank Statement Data   GST Invoice Data
+          │              │
+          └──────┬───────┘
+                 ▼
+        SettleIQ Data Pipeline
+                 │
+                 ▼
+        3-Tier Reconciliation
+                 │
+        ┌────────┼─────────┐
+        ▼        ▼         ▼
+      Exact    Fuzzy      AI
+      Match    Match   Exceptions
+        │        │         │
+        └────────┼─────────┘
+                 ▼
+          Finance Dashboard
+                 │
+        ┌────────┼────────┐
+        ▼        ▼        ▼
+      Audit    Q&A      Exports
+      Trail    Agent    Reports
 ```
-500 records processed    →    under 5 seconds
-405 Tier 1 exact matches →    deterministic, 100% confidence
- 56 Tier 2 fuzzy matches →    scored, 75–94% confidence
- 89 exceptions classified →   6 categories, AI-investigated
-92.2% auto-match rate    →    461 / 500 RZP records matched
-₹1.04 crore cleared      →    confirmed bank credits
-₹21.5 lakhs at risk      →    categorized by priority
-  6 unit tests           →    all passing (0.002s)
-```
 
 ---
 
-## The Problem
+# ⚙️ 3-Tier Reconciliation Engine
 
-Indian SMB finance teams spend 3–4 hours every week manually matching Razorpay settlement CSVs against bank statements in Excel. At 500+ transactions a month this breaks down completely:
+## Tier 1 — Deterministic Exact Matching
 
-- Razorpay settles in T+2 to T+3 business days — dates never align cleanly
-- Banks credit slightly different amounts due to MDR fee deductions (1.8–2.5%)
-- Duplicate UTR entries happen when NPCI retries batch settlements
-- GST on MDR fees needs separate reconciliation against GSTR-2B filings
-- Excel VLOOKUP breaks at scale
+The first layer performs a high-confidence match using:
 
-SettleIQ automates this entire workflow end-to-end in under 5 seconds.
+* UTR
+* Settlement amount
+* Integer-paise comparison
+* Small amount tolerance
 
----
-
-## What Makes It Different From Razorpay Recon
-
-Razorpay already has a product called Recon — built for enterprise offline POS businesses doing 200M+ transactions a month. It is a paid black box with no GST invoice matching and no audit trail you can read.
-
-SettleIQ is different in 3 specific ways:
-
-| | Razorpay Recon | SettleIQ |
-|---|---|---|
-| **Matching** | 2-way (RZP ↔ Bank) | 3-way (RZP ↔ Bank ↔ GST invoices) |
-| **Transparency** | Black box result | Every match has rule ID + confidence score + timestamp |
-| **Interaction** | Dashboard only | Conversational Q&A agent in plain English |
-| **GST** | Not native | GSTR-2B variance detection built-in |
-| **Scale** | 200M+ enterprise POS | 500–50,000 SMB online transactions |
-
----
-
-## Architecture & 3-Tier Reconciliation
-
-```mermaid
-graph TD
-    A[Razorpay Settlement CSV] --> D[SettleIQ Data Pipeline]
-    B[Bank Statement CSV] --> D
-    C[GST Tax Invoices CSV] --> D
-
-    D --> E[Tier 1: Exact UTR Match]
-    E -- UTR + amount within 5 paise --> M1[MATCHED — 100% confidence]
-    E -- No clean UTR match --> F[Tier 2: Fuzzy Scored Match]
-
-    F -- Amount ±2.5% + date T+3 + same merchant --> M2[MATCHED — 75–94% confidence]
-    F -- Still unmatched --> G[Tier 3: AI Exception Classifier]
-
-    G --> H[Gemini 2.5 Flash + Heuristic Fallback]
-    H --> I[6 Exception Categories with confidence scores]
-
-    M1 --> Dash[Streamlit Dashboard]
-    M2 --> Dash
-    I --> Dash
-    Dash --> Export[CSV + Color-coded Excel Export]
-```
-
----
-
-## The 3-Tier Engine
-
-### Tier 1 — Deterministic Exact Match
+Amounts are converted to integer paise before comparison to avoid floating-point precision issues.
 
 ```python
-# Convert to integer paise to eliminate IEEE 754 floating point bugs
-rp_paise   = int(round(amount_rp * 100))
+rp_paise = int(round(amount_rp * 100))
 bank_paise = int(round(amount_bank * 100))
-if abs(rp_paise - bank_paise) <= 5:  # 5 paise tolerance
-    → MATCHED at 100% confidence
+
+if abs(rp_paise - bank_paise) <= 5:
+    # MATCHED — 100% confidence
 ```
 
-**Why paise?** ₹5,420.00 vs ₹5,419.99 was failing exact match due to floating point representation. Converting to integer paise eliminates this class of bugs entirely. This was a real bug caught in development.
+### Result
 
-**Result: 405 records matched (81%) in under 1 second.**
-
-### Tier 2 — Scored Fuzzy Match
-
-```
-Score = 1.0 - (amount_diff_pct × 5) - (date_gap × 0.03)
-Clamped to [0.75, 0.94]
-
-Conditions:
-  - Same merchant_id
-  - Amount difference ≤ 2.5% (covers MDR fee variance of 1.8–2.5%)
-  - Date gap ≤ T+3 (RBI mandate for card/netbanking settlements)
-```
-
-**Result: 56 additional records matched at 75–94% confidence.**
-
-### Tier 3 — AI Exception Classification
-
-| Category | Detection | Action |
-|---|---|---|
-| Ghost Entry / Duplicate | Same UTR 2+ times in bank | Request bank reversal |
-| Timing Mismatch | Late credit, >T+3 gap | Wait for next settlement cycle |
-| Amount Mismatch | >2.5% difference | Check MDR invoice |
-| Missing Entry (Bank) | RZP settled, no bank record | Contact nodal bank with UTR |
-| Missing Entry (Razorpay) | Bank credit, no RZP record | Check alternate payment channels |
-| GST Variance | GST ≠ taxable × 0.18 | Reconcile GSTR-2B filing |
+**405 records matched at 100% confidence.**
 
 ---
 
-## AI Exception Explainer
+## Tier 2 — Scored Fuzzy Matching
 
-```
-Provider chain:
-1. Type-keyed cache (_EXPLANATION_CACHE)  ← 0 API calls on cache hit
-2. Google Gemini 2.5 Flash                ← Primary LLM
-3. OpenAI gpt-4o-mini                     ← Secondary LLM
-4. Domain heuristic fallback              ← Always works, zero credits needed
+Records that cannot be matched exactly are evaluated using:
+
+* Merchant ID
+* Amount difference
+* Settlement/credit date gap
+* T+3 settlement window
+
+Example scoring:
+
+```text
+Score =
+1.0
+- amount difference factor
+- date gap factor
 ```
 
-**Key optimization:** Cache keyed on `exception_type` not `payment_id`. Only 6 exception categories exist — maximum 6 API calls regardless of dataset size. Reduced from 47 API calls to 6. Eliminated rate limit issues entirely.
+The score is constrained to the configured confidence range.
+
+### Result
+
+**56 additional records matched with 75–94% confidence.**
 
 ---
 
-## Dashboard Features
+## Tier 3 — AI-Assisted Exception Classification
 
-### Tab 1 — Reconciliation Dashboard
-- 92.2% auto-match rate gauge
-- 3-tier decomposition donut chart (81% / 11.2% / 7.8%)
-- Cash Gap Breakdown table — 6 categories with amount at risk and AI confidence
-- Settlement Waterfall: Gross → MDR → GST on MDR → Expected → Actual → Gap
-- Explain Cash Gap — 4 risk buckets ranked by urgency
+Records that remain unmatched are classified into predefined exception categories.
 
-### Tab 2 — AI Exception Queue
-- Filter by exception category, confidence threshold, payment ID
-- Every record expands: AI root cause + confidence score + suggested action
-- Mark Resolved button (human-in-loop approval)
-- Draft Bank Email button for nodal bank escalation
+| Category                 | Typical Investigation                   |
+| ------------------------ | --------------------------------------- |
+| Amount Mismatch          | Check settlement/MDR difference         |
+| Timing Mismatch          | Check delayed settlement or bank credit |
+| Missing Entry — Bank     | Verify bank credit using UTR            |
+| Missing Entry — Razorpay | Check alternate payment channels        |
+| Ghost Entry / Duplicate  | Investigate duplicate UTR               |
+| GST Variance             | Reconcile GST calculation               |
 
-### Tab 3 — Settlement Q&A Agent
-- Plain English queries: "Why is pay_abc123 unreconciled?"
-- "How much cash is at risk?" → ₹21.5 lakhs, 89 exceptions
-- "What is our current match rate?" → 92.2%, 461 records cleared
+### Result
 
-### Tab 4 — Audit Trail & Exports
-- Full timestamped decision log — every match rule + confidence score
-- Download Matched Pairs CSV
-- Download Exception Queue CSV
-- Download color-coded Excel report (green = matched, red = exception)
+**89 exceptions classified across 6 categories.**
 
 ---
 
-## Unit Tests
+# 🤖 AI Exception Explainer
+
+SettleIQ uses a provider fallback chain for exception explanations:
+
+```text
+Exception Type
+      │
+      ▼
+Type-Keyed Cache
+      │
+      ├── Cache Hit → Return explanation
+      │
+      ▼
+Gemini 2.5 Flash
+      │
+      ▼
+OpenAI
+      │
+      ▼
+Domain Heuristic Fallback
+```
+
+### Key Optimization
+
+The explanation cache is keyed by **exception type**, rather than individual payment ID.
+
+Because the prototype uses six predefined exception categories, repeated exceptions can reuse the same explanation instead of triggering a new model request.
+
+This reduced API calls from **47 to 6** during development and helped avoid unnecessary rate-limit usage.
+
+The heuristic fallback also ensures that exception classification remains available even when an LLM provider is unavailable.
+
+---
+
+# 📊 Dashboard
+
+SettleIQ provides four main dashboard areas.
+
+### 1. Reconciliation Dashboard
+
+* 92.2% auto-match rate
+* Tier 1 / Tier 2 / Tier 3 breakdown
+* Cash-gap analysis
+* Settlement waterfall
+* Exception amounts
+* Risk prioritization
+
+### 2. AI Exception Queue
+
+* Filter by exception category
+* Filter by confidence
+* Search by payment ID
+* AI-generated root cause
+* Suggested action
+* Human-in-the-loop resolution
+* Bank escalation email drafting
+
+### 3. Settlement Q&A Agent
+
+Users can ask questions in plain English, for example:
+
+```text
+Why is pay_abc123 unreconciled?
+
+How much cash is currently at risk?
+
+What is our current match rate?
+```
+
+The agent uses the reconciliation results to provide contextual answers.
+
+### 4. Audit Trail & Exports
+
+Every reconciliation decision can be traced through:
+
+* Match rule
+* Confidence score
+* Timestamp
+* Exception category
+* Resolution status
+
+Users can export:
+
+* Matched pairs CSV
+* Exception queue CSV
+* Color-coded Excel report
+
+---
+
+# 🧪 Validation & Unit Tests
+
+The repository includes six unit tests covering important reconciliation scenarios.
 
 ```bash
 python -m unittest test_reconciliation.py -v
 ```
 
-```
+Current test suite:
+
+```text
 test_duplicate_utr_flagged_as_ghost_entry ... ok
-test_fuzzy_match_accepts_within_2_5_pct  ... ok
-test_fuzzy_match_rejects_beyond_2_5_pct  ... ok
-test_missing_bank_entry_classification   ... ok
-test_paise_conversion_float_fix          ... ok
-test_tier1_exact_utr_match               ... ok
+test_fuzzy_match_accepts_within_2_5_pct ... ok
+test_fuzzy_match_rejects_beyond_2_5_pct ... ok
+test_missing_bank_entry_classification ... ok
+test_paise_conversion_float_fix ... ok
+test_tier1_exact_utr_match ... ok
 
 Ran 6 tests in 0.002s — OK
 ```
 
 ---
 
-## Bugs Fixed During Development
+# 🐛 Development Bugs & Fixes
 
-| # | Bug | Root Cause | Fix |
-|---|---|---|---|
-| 1 | ₹5,420.00 ≠ ₹5,419.99 | IEEE 754 floating point | Convert to integer paise before comparison |
-| 2 | 47 API calls → rate limited | Cache keyed on payment_id | Re-key on exception_type — max 6 calls |
-| 3 | OpenAI insufficient_quota | Credits exhausted at 500-record scale | Reorder chain: Gemini → OpenAI → heuristic |
-| 4 | Waterfall showing ₹0 received | Reading bank_df not matched_df | Use matched_df['bank_amount'] |
-| 5 | KeyError: 'payment_id' on real CSV | Column normalizer missing space→underscore | Add .str.replace(r'\s+', '_') + alias map |
-
----
-
-## Exception Categories — Predefined
-
-1. **Amount Mismatch** — Difference >2% between RZP settlement and bank credit
-2. **Timing Mismatch** — Settlement date gap >3 days
-3. **Missing Entry (Bank)** — Settled in RZP, no bank credit within T+3
-4. **Missing Entry (Razorpay)** — Bank credit received, no RZP record
-5. **Ghost Entry / Duplicate** — Same UTR credited multiple times in bank
-6. **GST Variance** — GST on MDR differs from expected 18% calculation
+| Issue                                          | Root Cause                        | Fix                                        |
+| ---------------------------------------------- | --------------------------------- | ------------------------------------------ |
+| Amount comparison failed for small differences | IEEE 754 floating-point precision | Convert amounts to integer paise           |
+| Excessive LLM API calls                        | Cache keyed by payment ID         | Cache by exception type                    |
+| OpenAI quota exhaustion                        | Provider credits exhausted        | Gemini → OpenAI → heuristic fallback       |
+| Settlement waterfall showed ₹0 received        | Incorrect dataframe used          | Read matched bank amounts                  |
+| `payment_id` KeyError                          | CSV column normalization issue    | Added whitespace normalization and aliases |
 
 ---
 
-## Quick Start
+# 📈 Reproducible Results
+
+The current prototype operates on a 500-record dataset.
+
+```text
+Tier 1 — Exact UTR
+405 matched
+81.0%
+
+Tier 2 — Fuzzy
+56 matched
+11.2%
+
+Tier 3 — Exceptions
+89 records
+17.8%
+
+Total matched
+461 / 500
+92.2%
+```
+
+Financial position from the current dataset:
+
+```text
+Cleared Position:  ₹10,478,225.64
+Amount at Risk:    ₹2,155,357.19
+```
+
+Run the reconciliation engine to reproduce the results:
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Set up environment
-cp .env.example .env
-# Add GEMINI_API_KEY and OPENAI_API_KEY
-
-# Generate dataset
-python generate_datasets.py
-
-# Run reconciliation engine
 python reconciliation_engine.py
+```
 
-# Launch dashboard
+---
+
+# 🛠️ Tech Stack
+
+### Frontend / Dashboard
+
+* Streamlit
+* Plotly
+
+### AI / LLM
+
+* Google Gemini 2.5 Flash
+* OpenAI
+* Domain-specific heuristic fallback
+
+### Data Processing
+
+* Python
+* Pandas
+
+### Validation
+
+* Python `unittest`
+
+### Data Sources
+
+* Razorpay settlement data
+* Bank statement data
+* GST invoice data
+
+---
+
+# 📁 Repository Structure
+
+```text
+SettleIQ/
+│
+├── app.py
+├── reconciliation_engine.py
+├── exception_explainer.py
+├── generate_datasets.py
+├── test_reconciliation.py
+├── requirements.txt
+├── .env.example
+├── README.md
+│
+└── data/
+    └── generated datasets
+```
+
+### Core Files
+
+| File                       | Purpose                              |
+| -------------------------- | ------------------------------------ |
+| `app.py`                   | Streamlit dashboard                  |
+| `reconciliation_engine.py` | 3-tier reconciliation engine         |
+| `exception_explainer.py`   | AI + fallback exception explanations |
+| `generate_datasets.py`     | Dataset generation / ingestion       |
+| `test_reconciliation.py`   | Unit tests                           |
+| `README.md`                | Project documentation                |
+
+---
+
+# 🚀 Getting Started
+
+## 1. Clone the repository
+
+```bash
+git clone <YOUR_REPOSITORY_URL>
+cd SettleIQ
+```
+
+## 2. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+## 3. Configure environment variables
+
+Create a `.env` file:
+
+```bash
+cp .env.example .env
+```
+
+Add the required API keys:
+
+```env
+GEMINI_API_KEY=your_key_here
+OPENAI_API_KEY=your_key_here
+```
+
+## 4. Generate the dataset
+
+```bash
+python generate_datasets.py
+```
+
+## 5. Run reconciliation
+
+```bash
+python reconciliation_engine.py
+```
+
+## 6. Launch the dashboard
+
+```bash
 streamlit run app.py
+```
 
-# Run tests
+## 7. Run tests
+
+```bash
 python -m unittest test_reconciliation.py -v
 ```
 
 ---
 
-## File Structure
+# 🌐 Live Demo
 
-| File | Lines | Purpose |
-|---|---|---|
-| `app.py` | 750 | Streamlit dashboard — 4 tabs, waterfall, Q&A agent, exports |
-| `reconciliation_engine.py` | 367 | 3-tier matching engine + Excel export |
-| `exception_explainer.py` | 170 | Gemini → OpenAI → heuristic provider chain |
-| `generate_datasets.py` | 233 | Razorpay API ingestion + synthetic data generator |
-| `test_reconciliation.py` | — | 6 unit tests, all passing |
-| `README.md` | — | This file |
+**SettleIQ:**
+https://settleiq.streamlit.app
+
+The live prototype demonstrates:
+
+* Automated reconciliation
+* Match confidence
+* Exception classification
+* Cash-gap analysis
+* AI explanations
+* Settlement Q&A
+* Audit trail
+* CSV/Excel exports
 
 ---
 
-## On Our Numbers
+# 📌 Current Prototype Scope
 
-All metrics are calculated live from the 500-record dataset in this repo — not industry claims. Run `python reconciliation_engine.py` to reproduce them yourself.
+SettleIQ is a working prototype designed to demonstrate an end-to-end automated reconciliation workflow.
 
+The reported metrics are based on the **500-record dataset in this repository** and are not presented as industry-wide benchmarks.
+
+The system is designed around explainability and human-in-the-loop review: automated matching and AI-assisted classification surface potential issues, while financial teams retain control over final resolution.
+
+---
+
+## 📊 Current Dataset Results
+
+```text
+500 Razorpay records processed
+
+405  → Tier 1 exact matches
+ 56  → Tier 2 fuzzy matches
+ 89  → Tier 3 exceptions
+
+461 / 500 → 92.2% auto-match rate
+
+₹10,478,225.64 → Cleared position
+₹2,155,357.19  → Amount at risk
 ```
-Tier 1 (Exact UTR):     405 matched   (deterministic, 100% confidence)
-Tier 2 (Fuzzy Match):    56 matched   (scored, 75–94% confidence)
-Tier 3 (Exceptions):     89 classified (6 categories, AI-investigated)
-Match Rate:             92.2%          (461/500 RZP records)
-Cleared Position:       ₹10,478,225.64
-Amount at Risk:          ₹2,155,357.19
-```
+
+**SettleIQ — From spreadsheet reconciliation to explainable financial control.**
