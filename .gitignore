@@ -1,0 +1,16 @@
+# Environment variables & secrets (NEVER PUSH SECRETS TO GITHUB)
+.env
+
+# Python cache & build files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Streamlit config
+.streamlit/
+
+# OS metadata
+.DS_Store
+Thumbs.db
